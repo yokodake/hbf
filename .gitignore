@@ -1,0 +1,7 @@
+.stack-work/
+hbf.cabal
+*~
+foo
+\#*\#
+.ghc*
+dist*/
