@@ -1,0 +1,59 @@
+-- This file has been generated from package.yaml by hpack version 0.28.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 6b4d5f4a72f76e330a7566637e823888c689a5f3688c3dc3163dace2b973b311
+
+name:           hbf
+version:        0.1.0.0
+synopsis:       Brainfuck Interpreter
+description:    Please see the README on GitHub at <https://github.com/namigyj/hbf#readme>
+category:       Interpreter
+homepage:       https://github.com/namigyj/hbf#readme
+bug-reports:    https://github.com/namigyj/hbf/issues
+author:         ngyj
+maintainer:     ngyj@cinnbar.fr
+copyright:      2018 ngyj
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+extra-source-files:
+    ChangeLog.md
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/namigyj/hbf
+
+executable hbf
+  main-is: Main.hs
+  other-modules:
+      Core
+      Debug
+      Paths_hbf
+  hs-source-dirs:
+      src
+  default-extensions: OverloadedStrings
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , text
+    , vector
+  default-language: Haskell2010
+
+test-suite hbf-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_hbf
+  hs-source-dirs:
+      test
+  default-extensions: OverloadedStrings
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , hbf
+    , text
+    , vector
+  default-language: Haskell2010
