@@ -1,17 +1,17 @@
 module Core where
 
-import Debug.Trace
+import           Debug.Trace
 
-import Data.Char (ord)
-import Data.Maybe (fromMaybe)
-import Data.Word (Word8 (..), Word16 (..))
+import           Data.Char (ord, chr)
+import           Data.Maybe (fromMaybe)
+import           Data.Word (Word8 (..), Word16 (..))
 
-import Data.Vector (Vector, (!))
+import           Data.Text (Text)
+import qualified Data.Text as T
+import           Data.Text.IO as T (getLine)
+import           Data.Vector (Vector, (!))
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as V (new, write, read)
-import Data.Text (Text)
-import Data.Text.IO as T (getLine)
-import qualified Data.Text as T
 
 data Ins = Succ -- ^ '+' increment byte
          | Pred -- ^ '-' decrement byte
@@ -23,12 +23,13 @@ data Ins = Succ -- ^ '+' increment byte
          | End Int -- ^ ']' jnz on [
          deriving (Show, Eq)
 
-data InterpState = InterpState { memory :: Vector Word8
-                               , code :: Vector Ins
-                               , stack :: [Int] -- jmp stack for faster ]
-                               , ptr :: Int -- use of Int for indexing without conversion
-                               , ip :: Int
-                               } deriving (Show)
+data IState m = IState { memory :: m
+                       , code :: Vector Ins
+                       , stack :: [Int] -- ^ jmp stack for faster ]
+                       , ptr :: Int -- ^ use of Int for indexing without conversion
+                       , ip :: Int -- ^ intruction pointer
+                       , out :: [Word8] -- ^ what has been outputed so far
+                       } deriving (Show)
 
 maxMem :: Int
 maxMem = 30000
@@ -72,78 +73,77 @@ parse txt = V.fromList $ go 0 (Labels [] 0)
                       _ -> go i' lbl -- non valid characters are considered comments
 
 -- | make our initial interpState
-initState :: Vector Ins -> InterpState
-initState code' =  InterpState { memory = V.replicate 64 0
-                               , code = code'
-                               , stack = []
-                               , ptr = 0
-                               , ip = 0 }
+initState :: Vector Ins -> IState VMemory
+initState code' =  IState { memory = mcreate 64
+                          , code = code'
+                          , stack = []
+                          , ptr = 0
+                          , ip = 0
+                          , out = []
+                          }
 
+run_ :: BFMemory a => IState a -> IO ()
 run_ s0 = run step s0 >> putStrLn ""
 
-run f = untilM finish f
+run :: BFMemory a => (IState a -> IO (IState a)) -> IState a -> IO (IState a)
+run = untilM finish
   where
     finish s = ip s == V.length (code s)
 
-step :: InterpState -> IO InterpState
+step :: BFMemory a => IState a -> IO (IState a)
 step s0 = incip <$> step' s0 (code s0 ! ip s0)
-             where
-              incip s = s{ip=succ $ ip s}
-              -- we don't use succ and pred because they throw an exception on overflow
-              -- where as the (+) and (-) do a wraparound, which is what we want
-              step' s Succ = return $ mmodify (+1) s
-              step' s Pred = return $ mmodify (flip (-) 1) s
-              step' s Inc = return $ incPtr s
-              step' s Dec = return $ decPtr s
-              step' s Put = s <$ putWord (memory s ! ptr s)
-              step' s Get = (\c -> mmodify (const c) s) <$> getWord
-              step' s (Jmp i) = return $ if value s == 0
-                                          then jmp s
-                                          else push s
-              step' s (End _) = return $ if value s /= 0
-                                          then s{ip=unsafePeek s}
-                                          else pop s
+  where
+    -- updates the cell at current pointer with function
+    modifyMem f s = s{memory = mmodify f (ptr s) (memory s)}
+
+    incip s = s{ip=succ $ ip s}
+
+    -- we don't use succ and pred because they throw an exception on overflow
+    -- where as the (+) and (-) do a wraparound, which is what we want
+    step' s Succ = return $ modifyMem (+1) s
+    step' s Pred = return $ modifyMem (flip (-) 1) s
+    step' s Inc = return $ incPtr s
+    step' s Dec = return $ decPtr s
+    step' s Put = putWord s (memory s %! ptr s)
+    step' s Get = (\w -> modifyMem (const w) s) <$> getWord
+    step' s (Jmp i) = return $ if value s == 0
+                               then jmp s
+                               else push s
+    step' s (End _) = return $ if value s /= 0
+                               then s{ip=unsafePeek s}
+                               else pop s
 
 -- | read value in currently pointing cell
-value :: InterpState -> Word8
-value s = memory s ! ptr s
-
--- | helper function to modify the cell at the current pointer
--- FIXME handle out of bounds reading
-mmodify :: (Word8 -> Word8) -> InterpState -> InterpState
-mmodify f s = s{memory = modify' f (ptr s) (memory s)}
-  where
-    modify' f i = V.modify (\v -> V.read v i >>= V.write v i . f)
+value :: BFMemory a => IState a -> Word8
+value s = memory s %! ptr s
 
 -- | increase the pointer, grow memory if needed (until @maxMem@)
-incPtr :: InterpState -> InterpState
-incPtr s@InterpState{memory=m, ptr=p}
-  | p < V.length m || p >= maxMem = s{ptr=succ p}
-  | otherwise = s{memory=realloc m, ptr=succ p}
+incPtr :: BFMemory a => IState a -> IState a
+incPtr s@IState{memory=m, ptr=p}
+  | p < msize m || p >= maxMem = s{ptr=succ p}
+  | otherwise = s{memory=newMem, ptr=succ p}
   where
-    realloc old = V.update_ new idx old
-      where
-        size = min maxMem $ V.length old * 2
-        new = V.replicate size initMem
-        idx = V.enumFromN 0 $ V.length old
+    newMem = mrealloc m $ max (msize m * 2) maxMem
 
 -- | decrease the pointer
 -- NOTE should we consider freeing memory?
-decPtr :: InterpState -> InterpState
+decPtr :: BFMemory a => IState a -> IState a
 decPtr s = s{ptr=pred (ptr s)}
 
 -- TODO ASCII/hex
 -- TODO command line arg to for choice between decimal,hex,etc.
-putWord :: Word8 -> IO ()
-putWord = putStr . show
+-- FIXME faster append to output (probably change output for something else)
+putWord :: BFMemory a => IState a -> Word8 -> IO (IState a)
+putWord s c = do putChar . chr . fromIntegral $ c
+                 return s{out=out s ++ [c]}
 
 getWord :: IO Word8
 getWord = fromIntegral . ord <$> getChar
 
 -- | if we're on a Jmp instruction we set the ip on the index of
 -- corresponding End instruction. Else we do nothing
-jmp :: InterpState -> InterpState
-jmp s@InterpState{ip=i, code=c} = s{ip=jmp' $ c ! i}
+jmp :: BFMemory a => IState a -> IState a
+jmp s@IState{ip=i, code=c} = s{ip=jmp' $ c ! i}
   where
     slice = V.drop i c
     jmp' (Jmp idx) = fromMaybe failure $ V.findIndex (==End idx) slice
@@ -152,15 +152,15 @@ jmp s@InterpState{ip=i, code=c} = s{ip=jmp' $ c ! i}
     failure = errorWithoutStackTrace "exception: the parser is broken"
 
 -- | get the the index on the top of the jumps stack, crash if empty
-unsafePeek :: InterpState -> Int
+unsafePeek :: BFMemory a => IState a -> Int
 unsafePeek = head . stack
 
-push, pop :: InterpState -> InterpState
+push, pop :: BFMemory a => IState a -> IState a
 -- | push the ip on the jumps stack
-push s@InterpState{ip=i, stack=is} = s{stack=i:is}
+push s@IState{ip=i, stack=is} = s{stack=i:is}
 -- | remove the ip from the jumps stack
-pop s@InterpState{stack=[]} = s
-pop s@InterpState{stack=i:is} = s{stack=is}
+pop s@IState{stack=[]} = s
+pop s@IState{stack=i:is} = s{stack=is}
 
 
 -- | @until@ but with a monadic function
@@ -169,3 +169,41 @@ untilM pred f s0 = if pred s0 then
                      return s0
                    else
                      f s0 >>= untilM pred f
+
+
+-- | Separate Memory class. I've been thinking about different ways of
+-- implementing this memory array, and I'd like to benchmark them all
+-- so might as well lay the groundwork for easy swapping?
+-- TODO : bytestring impl
+--      , group of memblocks (make new block instead of reallocing)
+class BFMemory a where
+  msize :: a -> Int         -- ^ get capacity
+  (%!) :: a -> Int -> Word8 -- ^ get indexing
+  mmodify :: (Word8 -> Word8) -> Int -> a -> a -- ^ element updating
+  mrealloc :: a -> Int -> a -- ^ copy elements in new memory of given size
+  mcreate :: Int -> a       -- ^ create new (zeroed) memory of given size
+  empty :: a                -- ^ create empty memory
+  slice :: Int -> Int -> a -> [Word8] -- ^ FIXME linked lists suck ass
+
+  mcreate = mrealloc empty
+  empty = mcreate 0
+  {-# MINIMAL msize, (%!), mmodify, mrealloc, slice, (mcreate | empty) #-}
+
+newtype VMemory = VMemory { getVec :: Vector Word8
+                          } deriving (Show, Eq)
+
+instance BFMemory VMemory where
+  (%!) = (!) . getVec
+
+  mmodify f i = VMemory . V.modify (\v -> V.read v i >>= V.write v i . f) . getVec
+
+  mrealloc (VMemory old) size = VMemory $ V.update_ new idx old
+    where
+      new = V.replicate size initMem
+      idx = V.enumFromN 0 $ V.length old
+
+  mcreate = VMemory . flip V.replicate 0
+
+  msize = V.length . getVec
+
+  slice s e = V.toList . V.slice s e . getVec

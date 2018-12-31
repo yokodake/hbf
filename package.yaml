@@ -4,7 +4,7 @@ github:              "namigyj/hbf"
 license:             BSD3
 author:              ngyj
 maintainer:          "ngyj@cinnbar.fr"
-copyright:           "2018 ngyj"
+copyright:           "2018-2019 ngyj"
 
 extra-source-files:
 - README.md
@@ -26,6 +26,7 @@ dependencies:
 - base >= 4.7 && < 5
 - vector
 - text
+- bytestring
 
 executables:
   hbf:
@@ -46,3 +47,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - hbf
+    - hspec
