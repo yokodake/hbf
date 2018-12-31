@@ -159,7 +159,8 @@ push, pop :: InterpState -> InterpState
 -- | push the ip on the jumps stack
 push s@InterpState{ip=i, stack=is} = s{stack=i:is}
 -- | remove the ip from the jumps stack
-pop s@InterpState{ip=i, stack=is} = s{stack=i:is}
+pop s@InterpState{stack=[]} = s
+pop s@InterpState{stack=i:is} = s{stack=is}
 
 
 -- | @until@ but with a monadic function
